@@ -1,5 +1,4 @@
 
-
 # Use official Node mirrors.
 # https://hub.docker.com
 # first run `docker pull node:18.20.4-alpine3.20`
@@ -30,7 +29,12 @@ RUN apk add --no-cache libc6-compat
 
 
 # The WORKDIR instruction sets the working directory for any RUN, CMD, ENTRYPOINT, COPY and ADD instructions that follow it in the Dockerfile
-WORKDIR /app-demo-server
+WORKDIR /fullstack-nextjs-app-template
+
+
+# If npm network problems prevent you from installing npm dependency packages, please use the following code
+# RUN npm config set registry http://registry.npmmirror.com
+
 
 # Install dependencies based on the preferred package manager
 COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* ./
@@ -41,12 +45,13 @@ RUN \
   else echo "Lockfile not found." && exit 1; \
   fi
 
-    
+
 # Rebuild the source code only when needed
 FROM base AS builder
-WORKDIR /app-demo-server
-COPY --from=deps /app-demo-server/node_modules ./node_modules
+WORKDIR /fullstack-nextjs-app-template
+COPY --from=deps /fullstack-nextjs-app-template/node_modules ./node_modules
 COPY . .
+
 
 
 # ==========================================
@@ -60,8 +65,7 @@ COPY . .
 # ==========================================
 # Check if the folder exists
 # ==========================================
-RUN if test -e ./custom; then cp -avr ./custom/pages/ /app-demo-server/; cp -avr ./custom/src/ /app-demo-server/; cp -avr ./custom/public/ /app-demo-server/; fi
-
+RUN if test -e ./custom; then cp -avr ./custom/pages/ /fullstack-nextjs-app-template/; cp -avr ./custom/src/ /fullstack-nextjs-app-template/; cp -avr ./custom/public/ /fullstack-nextjs-app-template/; fi
 
 
 # ==========================================
@@ -74,70 +78,83 @@ RUN npm run build
 # Production image, copy all the files and run next
 # ==========================================
 FROM base AS runner
-WORKDIR /app-demo-server
+WORKDIR /fullstack-nextjs-app-template
 
 ENV NODE_ENV=production
 
 
 # ==========================================
+# For Next.js
+# ==========================================
+# Next.js collects completely anonymous telemetry data about general usage.
+# Learn more here: https://nextjs.org/telemetry
+# Uncomment the following line in case you want to disable telemetry during the build.
+# ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+COPY --from=builder /fullstack-nextjs-app-template/public ./public
+
+# Next.js Directory permission settings (IF arm64 to amd64)
+RUN ls -ld ./public
+RUN chmod -R 755 ./public
+
+
+
+# Automatically leverage output traces to reduce image size
+# https://nextjs.org/docs/advanced-features/output-file-tracing
+COPY --from=builder --chown=nextjs:nodejs /fullstack-nextjs-app-template/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /fullstack-nextjs-app-template/.next/static ./.next/static
+
+
+USER nextjs
+
+
+# ==========================================
 # run node script (deploy custom server configuration)
 # ==========================================
-# Copy other server files and install dependencies (use root authority, otherwise there will be no authority)
-USER root
-RUN mkdir -p /app-demo-server
-RUN mkdir -p /app-demo-server/utils
-RUN mkdir -p /app-demo-server/plugins
-RUN mkdir -p /app-demo-server/routes
-RUN mkdir -p /app-demo-server/core
-RUN mkdir -p /app-demo-server/uploads
-RUN mkdir -p /app-demo-server/call
-
-
-COPY ./utils/* /app-demo-server/utils/
-COPY ./plugins/* /app-demo-server/plugins/
-COPY ./routes/* /app-demo-server/routes/
-
-#
-COPY core/ /app-demo-server/core
-RUN ls -la /app-demo-server/core
-
-
-#--
-COPY call/ /app-demo-server/call
-RUN ls -la /app-demo-server/call
-
-# 
-COPY ./package.json /app-demo-server
-# COPY ./eslint.config.mjs /app-demo-server
-# COPY ./.htmlvalidate.json /app-demo-server
-# COPY ./.stylelintrc.json /app-demo-server
-
-
-#
-COPY ./server-php.js /app-demo-server
-COPY ./server-backup.js /app-demo-server
-COPY ./server-socket.js /app-demo-server
-COPY ./server-files.js /app-demo-server
-COPY ./server-upload.js /app-demo-server
-COPY ./server-logger.js /app-demo-server
-COPY ./server-auth.js /app-demo-server
-
-
-#--
-# `temp_backup` needs to be empty
-RUN mkdir -p /app-demo-server/temp_backup
-
-
-
-COPY --from=deps /app-demo-server/node_modules ./node_modules
-
-
-
-
-#  Declare 4000 ports, just tell the mirror user the default port, the actual mapping will be informed below
-EXPOSE 4000
-ENV PORT=4000
+# Declare port 3000, just tell the mirror user the default port, the actual mapping will be informed below
+EXPOSE 3000
+ENV PORT=3000
 
 # Execute a single file
-CMD ["node", "server-php.js"]
+CMD ["node", "server.js"]
+
+
+
+# # ==========================================
+# # Execute multiple files using node (write entry point)
+# # ==========================================
+# # Copy other server files and install dependencies (use root authority, otherwise there will be no authority)
+# USER root
+# RUN mkdir -p /fullstack-nextjs-app-template/backend
+# RUN mkdir -p /fullstack-nextjs-app-template/backend/libs
+# COPY ./backend/server-upload.js ./backend/
+# COPY ./backend/libs/* ./backend/libs/
+
+# # "COPY" should be followed immediately before the command to install dependencies
+# # Copy the folders outside the "next.js" separately
+# RUN mkdir -p /fullstack-nextjs-app-template/plugins
+# COPY plugins/ /fullstack-nextjs-app-template/plugins
+
+# # execute the ls command inside the image's shell to recursively list all subdirectories' content of the "WORKDIR" folder
+# RUN ls -la /fullstack-nextjs-app-template/plugins
+
+# COPY --from=deps /fullstack-nextjs-app-template/node_modules ./node_modules
+
+
+
+# ==========================================
+# run node script (multiple)
+# ==========================================
+# # create a `.sh` file
+# RUN printf "node server.js& node ./backend/server-upload.js&\nwait\necho \"--> All is ending\"" > entrypoint.sh
+
+# # Declare 3000 and 4001 ports, just tell the mirror user the default port, the actual mapping will be informed below
+# EXPOSE 3000
+# EXPOSE 4001
+
+# # Execute bash file
+# CMD ["/bin/sh", "entrypoint.sh"]
 
